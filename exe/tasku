@@ -3,8 +3,4 @@
 
 require "tasku"
 
-if ARGV.empty?
-  Tasku::TUI::App.new.run
-else
-  Tasku::CLI::App.start(ARGV)
-end
+Tasku::CLI::App.start(ARGV)
