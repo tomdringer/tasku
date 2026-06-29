@@ -1,0 +1,7 @@
+*.gem
+.bundle/
+vendor/
+tmp/
+lib/tasku/tui/
+.DS_Store
+.idea/
