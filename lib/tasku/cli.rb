@@ -13,6 +13,40 @@ module Tasku
 
     TAGLINE = "\u30BF\u30B9\u30AF\u30EA\u30B9\u30C8 \u2014 terminal task manager"
 
+    class ConfigApp < Thor
+      desc "list", "Show all preferences and their current values"
+      def list
+        pastel = Pastel.new
+        puts ""
+        Tasku::Config::VALID_KEYS.each do |key, meta|
+          current = Tasku::Config.get(key)
+          options_str = meta[:values].map { |v| v == current ? pastel.bold(pastel.green(v)) : pastel.dim(v) }.join(", ")
+          puts "  #{pastel.bold(key.ljust(20))} #{options_str}  #{pastel.dim("— #{meta[:description]}")}"
+        end
+        puts ""
+      end
+
+      desc "set KEY VALUE", "Set a preference value"
+      def set(key, value)
+        pastel = Pastel.new
+        meta = Tasku::Config::VALID_KEYS[key]
+        abort pastel.red("Unknown preference '#{key}'. Run `tasku config list` to see available keys.") unless meta
+        unless meta[:values].include?(value)
+          abort pastel.red("Invalid value '#{value}' for '#{key}'. Valid: #{meta[:values].join(', ')}")
+        end
+        Tasku::Config.set(key, value)
+        puts pastel.green("  ✓ #{key} set to '#{value}'.")
+      end
+
+      desc "get KEY", "Get the current value of a preference"
+      def get(key)
+        pastel = Pastel.new
+        meta = Tasku::Config::VALID_KEYS[key]
+        abort pastel.red("Unknown preference '#{key}'. Run `tasku config list` to see available keys.") unless meta
+        puts "  #{key}: #{pastel.bold(Tasku::Config.get(key))}"
+      end
+    end
+
     class App < Thor
       def self.start(args = ARGV, **opts)
         sql_index = args.index("--sql")
@@ -32,6 +66,19 @@ module Tasku
       end
 
       class_option :db, type: :string, desc: "Path to SQLite database (default: ~/.tasku/tasks.db)", hide: true
+
+      desc "config SUBCOMMAND", "Manage user preferences"
+      subcommand "config", ConfigApp
+
+      def help(*args)
+        if args.empty?
+          puts ""
+          puts pastel.bold(LOGO)
+          puts "  #{pastel.bold(TAGLINE)}"
+          puts ""
+        end
+        super
+      end
 
       desc "sql QUERY", "Run a raw SQL query against the database"
       def sql(query)
@@ -157,13 +204,14 @@ module Tasku
         dataset = dataset.order(order)
 
         tasks = dataset.all
-        terminal.render_list(tasks)
+        bar = { "bar_project" => Config.get("bar_project"), "bar_priority" => Config.get("bar_priority"), "bar_status" => Config.get("bar_status") }
+        terminal.render_list(tasks, colour_map: Project.colour_map, spacing: Config.get("list_spacing"), bar: bar)
       end
 
       desc "show ID", "Show task details"
       def show(id)
         task = find_task(id)
-        terminal.render_show(task)
+        terminal.render_show(task, colour_map: Project.colour_map)
       end
 
       desc "edit ID", "Edit a task"
@@ -241,23 +289,46 @@ module Tasku
       desc "stats", "Show task statistics"
       def stats
         tasks = Task.dataset.all
-        terminal.render_stats(tasks) if tasks
+        terminal.render_stats(tasks, colour_map: Project.colour_map) if tasks
       end
 
       desc "projects", "List all projects"
       def projects
-        projects = Task.dataset.select(:project).where(Sequel.~(project: nil)).distinct.order(:project).map(:project)
-        if projects.empty?
+        project_names = Task.dataset.select(:project).where(Sequel.~(project: nil)).distinct.order(:project).map(:project)
+        if project_names.empty?
           puts pastel.yellow("  No projects found.")
           return
         end
 
+        colour_map = Project.colour_map
         puts ""
-        projects.each do |p|
+        project_names.each do |p|
           count = Task.where(project: p).count
-          puts "  #{pastel.bold(p)} #{pastel.dim("(#{count} task(s))")}"
+          colour = colour_map[p]
+          swatch = colour ? "#{hex_colour_str("█", colour)} " : "  "
+          name_str = colour ? hex_bold_str(p, colour) : pastel.bold(p)
+          puts "  #{swatch}#{name_str} #{pastel.dim("(#{count} task(s))")}"
         end
         puts ""
+      end
+
+      desc "colour PROJECT HEX", "Set a project's display colour (e.g. #FF5733). Omit HEX to clear."
+      def colour(project, hex = nil)
+        if hex.nil?
+          proj = Project[project]
+          if proj
+            proj.update(colour: nil)
+            puts pastel.green("  Colour cleared for project '#{project}'.")
+          else
+            puts pastel.yellow("  No colour set for project '#{project}'.")
+          end
+          return
+        end
+
+        validated = validate_hex!(hex)
+        Project.find_or_create(name: project).update(colour: validated)
+        swatch = hex_colour_str("█", validated)
+        puts "  #{swatch} Colour #{pastel.bold(validated)} set for project '#{pastel.bold(project)}'."
       end
 
       desc "categories", "List all categories"
@@ -427,6 +498,24 @@ module Tasku
           "cancelled"   => :red,
           "archived"    => :dim
         }.freeze
+
+        def validate_hex!(hex)
+          hex = hex.start_with?("#") ? hex : "##{hex}"
+          unless hex.match?(/\A#[0-9a-fA-F]{6}\z/)
+            abort pastel.red("Invalid hex colour '#{hex}'. Use format #RRGGBB.")
+          end
+          hex
+        end
+
+        def hex_colour_str(text, hex)
+          r, g, b = hex.delete("#").scan(/../).map { |c| c.to_i(16) }
+          "\e[38;2;#{r};#{g};#{b}m#{text}\e[0m"
+        end
+
+        def hex_bold_str(text, hex)
+          r, g, b = hex.delete("#").scan(/../).map { |c| c.to_i(16) }
+          "\e[1;38;2;#{r};#{g};#{b}m#{text}\e[0m"
+        end
 
         def colour_cell(col, padded_val, row)
           case col.to_s

@@ -42,6 +42,11 @@ module Tasku
       if db.table_exists?(:tasks) && !db.schema(:tasks).map(&:first).include?(:code)
         db.alter_table(:tasks) { add_column :code, String }
       end
+
+      db.create_table? :projects do
+        String :name, primary_key: true
+        String :colour
+      end
     end
   end
 end

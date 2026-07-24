@@ -5,6 +5,23 @@ require "pastel"
 module Tasku
   module Output
     class Terminal
+      PRIORITY_HEX = {
+        "none"   => "#6B7280",
+        "low"    => "#06B6D4",
+        "medium" => "#EAB308",
+        "high"   => "#EF4444",
+        "urgent" => "#E879F9"
+      }.freeze
+
+      STATUS_HEX = {
+        "backlog"     => "#6B7280",
+        "todo"        => "#3B82F6",
+        "in_progress" => "#EAB308",
+        "done"        => "#22C55E",
+        "cancelled"   => "#EF4444",
+        "archived"    => "#6B7280"
+      }.freeze
+
       PRIORITY_STYLES = {
         "none"   => { color: :dim,    symbol: " " },
         "low"    => { color: :cyan,   symbol: "↓" },
@@ -29,13 +46,13 @@ module Tasku
         @term_width = [terminal_width, 80].min
       end
 
-      def render_list(tasks)
+      def render_list(tasks, colour_map: {}, spacing: "compact", bar: {})
         if tasks.empty?
           puts @pastel.yellow("  No tasks found.")
           return
         end
 
-        rows = tasks.map { |t| build_columns(t) }
+        rows = tasks.map { |t| build_columns(t, colour_map, bar) }
         col_widths = compute_widths(rows)
         total = col_widths.sum + (COL_SEP.length * (col_widths.length - 1))
 
@@ -44,12 +61,13 @@ module Tasku
         rows.each do |cols|
           line = cols.each_with_index.map { |c, i| c.to_s.ljust(col_widths[i]) }.join(COL_SEP)
           puts "  #{line}"
+          puts "" if spacing == "spacious"
         end
         puts @pastel.dim("  #{"─" * total}")
         puts @pastel.dim("  #{tasks.length} task(s) found")
       end
 
-      def render_show(task)
+      def render_show(task, colour_map: {})
         puts ""
         puts @pastel.bold("  Task ##{task.id}")
         puts @pastel.dim("  #{"─" * 60}")
@@ -57,7 +75,7 @@ module Tasku
         fields = [
           ["Name",       @pastel.bold(task.name)],
           ["Description", task.description ? @pastel.dim(task.description) : @pastel.dim("—")],
-          ["Project",    task.project || @pastel.dim("—")],
+          ["Project",    project_str(task.project, colour_map)],
           ["Category",   task.category || @pastel.dim("—")],
           ["Priority",   priority_tag(task.priority)],
           ["Status",     status_tag(task.status)],
@@ -90,7 +108,7 @@ module Tasku
         puts @pastel.red("  ✗ Task ##{task.id} deleted") + " — #{@pastel.bold(task.name)}"
       end
 
-      def render_stats(tasks)
+      def render_stats(tasks, colour_map: {})
         puts ""
         puts @pastel.bold("  Task Statistics")
         puts @pastel.dim("  #{"─" * 60}")
@@ -98,12 +116,13 @@ module Tasku
         total = tasks.length
         by_status = tasks.group_by(&:status).transform_values(&:length)
         by_priority = tasks.group_by(&:priority).transform_values(&:length)
+        by_project = tasks.group_by(&:project).transform_values(&:length)
         overdue = tasks.count(&:overdue?)
-        projects = tasks.map(&:project).compact.uniq.length
+        project_count = tasks.map(&:project).compact.uniq.length
 
         puts "  #{@pastel.dim("Total tasks:".ljust(20))} #{total}"
         puts "  #{@pastel.dim("Overdue:".ljust(20))} #{overdue.positive? ? @pastel.red(overdue.to_s) : @pastel.green("0")}"
-        puts "  #{@pastel.dim("Projects:".ljust(20))} #{projects}"
+        puts "  #{@pastel.dim("Projects:".ljust(20))} #{project_count}"
         puts ""
 
         puts "  #{@pastel.dim("By Status:")}"
@@ -122,16 +141,42 @@ module Tasku
 
           puts "    #{priority_tag(p)} #{@pastel.send(PRIORITY_STYLES.dig(p, :color) || :dim, count.to_s.rjust(3))}"
         end
+
+        puts ""
+        puts "  #{@pastel.dim("By Project:")}"
+        by_project.sort_by { |_, count| -count }.each do |name, count|
+          label = name || @pastel.dim("(none)")
+          coloured_name = name && colour_map[name] ? hex_colour_str(name, colour_map[name]) : label
+          padding = " " * [20 - strip_ansi(coloured_name).length, 0].max
+          puts "    #{coloured_name}#{padding} #{@pastel.dim(count.to_s.rjust(3))}"
+        end
         puts ""
       end
 
       private
 
-      def build_columns(task)
+      def build_columns(task, colour_map = {}, bar = {})
         id_val = task.code && !task.code.empty? ? "#{task.code}-#{task.id}" : task.id.to_s
-        id_str = @pastel.dim(id_val)
+
+        segments = []
+        if bar["bar_project"] != "off"
+          proj_colour = task.project && colour_map[task.project]
+          segments << (proj_colour ? hex_colour_str("█", proj_colour) : @pastel.dim("█"))
+        end
+        if bar["bar_priority"] != "off"
+          segments << hex_colour_str("█", PRIORITY_HEX[task.priority] || PRIORITY_HEX["none"])
+        end
+        if bar["bar_status"] != "off"
+          segments << hex_colour_str("█", STATUS_HEX[task.status] || STATUS_HEX["backlog"])
+        end
+
+        id_str = if segments.any?
+                   "#{segments.join} #{@pastel.dim(id_val)}"
+                 else
+                   @pastel.dim(id_val)
+                 end
         name_str = @pastel.bold(task.name)
-        proj_str = task.project || @pastel.dim("—")
+        proj_str = project_str(task.project, colour_map)
         prio_str = priority_tag(task.priority)
         stat_str = status_tag(task.status)
         due_str = due_cell(task)
@@ -179,6 +224,21 @@ module Tasku
         style = STATUS_STYLES[status] || STATUS_STYLES["backlog"]
         label = status.tr("_", " ").capitalize
         @pastel.send(style[:color], "#{style[:symbol]} #{label}")
+      end
+
+      def hex_colour_str(text, hex)
+        r, g, b = hex.delete("#").scan(/../).map { |c| c.to_i(16) }
+        "\e[38;2;#{r};#{g};#{b}m#{text}\e[0m"
+      end
+
+      def project_str(project, colour_map)
+        return @pastel.dim("—") unless project
+
+        colour = colour_map[project]
+        return project unless colour
+
+        r, g, b = colour.delete("#").scan(/../).map { |c| c.to_i(16) }
+        "\e[38;2;#{r};#{g};#{b}m#{project}\e[0m"
       end
 
       def due_cell(task)

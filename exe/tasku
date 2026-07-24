@@ -3,4 +3,8 @@
 
 require "tasku"
 
-Tasku::CLI::App.start(ARGV)
+if ARGV.empty?
+  Tasku::CLI::App.start(["help"])
+else
+  Tasku::CLI::App.start(ARGV)
+end
