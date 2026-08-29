@@ -43,7 +43,7 @@ module Tasku
 
       def initialize
         @pastel = Pastel.new
-        @term_width = [terminal_width, 80].min
+        @term_width = terminal_width
       end
 
       def render_list(tasks, colour_map: {}, spacing: "compact", bar: {})

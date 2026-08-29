@@ -48,6 +48,10 @@ module Tasku
     end
 
     class App < Thor
+      def self.exit_on_failure?
+        true
+      end
+
       def self.start(args = ARGV, **opts)
         sql_index = args.index("--sql")
         if sql_index
@@ -170,7 +174,7 @@ module Tasku
       option :category, type: :string,  desc: "Filter by category"
       option :tags,     type: :string,  desc: "Filter by tag (comma-separated)"
       option :overdue,  type: :boolean, desc: "Show only overdue tasks"
-      option :sort,     type: :string,  desc: "Sort by: name, priority, due, status, created"
+      option :sort,     type: :string,  desc: "Sort by: id, name, priority, due, status, created"
       option :order,    type: :string,  desc: "Order: asc, desc", default: "asc"
       def list
         dataset = Task.dataset
@@ -197,7 +201,8 @@ module Tasku
                    when "priority" then Sequel.case(Task::VALID_PRIORITIES.each_with_index.to_h, 999, :priority)
                    when "due"      then :due_day
                    when "status"   then Sequel.case(Task::VALID_STATUSES.each_with_index.to_h, 999, :status)
-                   else :created_at
+                   when "created"  then :created_at
+                   else :id
                    end
 
         order = options[:order] == "desc" ? Sequel.desc(sort_col) : Sequel.asc(sort_col)
