@@ -17,3 +17,8 @@ begin
 rescue LoadError
   # TUI not available in this build
 end
+begin
+  require_relative "tasku/tui/mado_list"
+rescue LoadError
+  # Mado integration not available
+end

@@ -153,6 +153,24 @@ module Tasku
         puts ""
       end
 
+      # Returns an array of pre-formatted row strings for MadoList.
+      # Accounts for the "[>] " prefix (4 extra chars) when computing widths.
+      def build_mado_rows(tasks, colour_map = {}, bar = {})
+        return [] if tasks.empty?
+
+        orig_width  = @term_width
+        @term_width = [@term_width - 4, 40].max
+
+        col_rows   = tasks.map { |t| build_columns(t, colour_map, bar) }
+        col_widths = compute_widths(col_rows)
+        result = col_rows.map do |cols|
+          cols.each_with_index.map { |c, i| ansi_ljust(c.to_s, col_widths[i]) }.join(COL_SEP)
+        end
+
+        @term_width = orig_width
+        result
+      end
+
       private
 
       def build_columns(task, colour_map = {}, bar = {})
@@ -207,6 +225,14 @@ module Tasku
 
       def strip_ansi(str)
         str.gsub(/\e\[[0-9;]*m/, "")
+      end
+
+      # Pad an ANSI-coloured string to `width` visible characters.
+      # String#ljust counts bytes (including escape codes), so we compute
+      # the visible length ourselves and append plain spaces for the deficit.
+      def ansi_ljust(str, width)
+        deficit = width - strip_ansi(str).length
+        deficit > 0 ? str + (" " * deficit) : str
       end
 
       def terminal_width

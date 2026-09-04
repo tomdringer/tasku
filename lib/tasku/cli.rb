@@ -210,7 +210,11 @@ module Tasku
 
         tasks = dataset.all
         bar = { "bar_project" => Config.get("bar_project"), "bar_priority" => Config.get("bar_priority"), "bar_status" => Config.get("bar_status") }
-        terminal.render_list(tasks, colour_map: Project.colour_map, spacing: Config.get("list_spacing"), bar: bar)
+        if ENV["MADO"] == "1"
+          Tasku::TUI::MadoList.new(tasks, colour_map: Project.colour_map, bar: bar).run
+        else
+          terminal.render_list(tasks, colour_map: Project.colour_map, spacing: Config.get("list_spacing"), bar: bar)
+        end
       end
 
       desc "show ID", "Show task details"
