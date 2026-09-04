@@ -170,7 +170,7 @@ gem build tasku.gemspec && gem install tasku-*.gem
 ## Introducing Mado
 
 On October 1st Tasku's sister product Mado will be released. Mado is a terminal multiplexer, with multiple themes and plugins to make your journey building software a lot more pleasent. 
-Tasku will have multiple plugins for Tasku, including projects, stats, workspaces etc. Wheather you want to use Tasku with or without Mado, both versions will still be maintained.
+Mado will have multiple plugins and shortcuts for Tasku, including projects, stats, workspaces etc. Wheather you want to use Tasku with or without Mado, both versions will still be maintained.
 Please check https://nerimasoft.co.uk/mado.html for more info.
 
 ## License
