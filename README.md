@@ -2,7 +2,7 @@
 
 タスクリスト — a beautiful terminal task manager.
 
-Colour-coded priorities, status tracking, project colours, SQLite persistence, and a clean CLI interface.
+Colour-coded priorities, status tracking, project colours, SQLite persistence, and a clean CLI interface. Pair it with [Tasku Cloud](https://tasku.cloud) for backup, sync, and team collaboration.
 
 ![Tasku List](screenshots/tasku-list.png)
 
@@ -167,11 +167,22 @@ To rebuild the gem locally:
 gem build tasku.gemspec && gem install tasku-*.gem
 ```
 
+## Tasku Cloud
+
+[Tasku Cloud](https://tasku.cloud) is the companion web app for Tasku. It backs up your tasks, keeps them in sync across devices, and gives your whole team a shared view.
+
+**Free for individuals** — sign up and get cloud backup and sync with no credit card required.
+**Teams plan** — adds shared projects, task assignment, and an activity feed for collaborative work.
+
+Your local SQLite database is always the source of truth. Tasku Cloud is an optional layer — removing it doesn't affect your data.
+
+---
+
 ## Introducing Mado
 
-On October 1st Tasku's sister product Mado will be released. Mado is a terminal multiplexer, with multiple themes and plugins to make your journey building software a lot more pleasent. 
-Mado will have multiple plugins and shortcuts for Tasku, including projects, stats, workspaces etc. Wheather you want to use Tasku with or without Mado, both versions will still be maintained.
-Please check https://nerimasoft.co.uk/mado.html for more info.
+[Mado](https://nerimasoft.co.uk/mado.html) is a native macOS terminal multiplexer releasing October 1st, with first-class Tasku integration built in. Your tasks, projects, and priorities live in the sidebar, always a glance away. Switch projects in the Tasku panel and Mado switches with you, restoring the exact pane layout you had open last time.
+
+Both Tasku and Mado are maintained independently — you can use either with or without the other.
 
 ## License
 

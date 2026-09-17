@@ -17,6 +17,12 @@ begin
 rescue LoadError
   # TUI not available in this build
 end
+
+# Mado integration — ensure Tasku::TUI exists even if the full TUI did not load
+module Tasku
+  module TUI; end
+end
+require_relative "tasku/tui/mado_log"
 begin
   require_relative "tasku/tui/mado_list"
 rescue LoadError

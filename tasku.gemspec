@@ -22,7 +22,8 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.files = Dir["lib/**/*", "exe/*"].reject { |f|
-    f.start_with?("lib/tasku/tui") && f != "lib/tasku/tui/mado_list.rb"
+    f.start_with?("lib/tasku/tui") &&
+      !%w[lib/tasku/tui/mado_list.rb lib/tasku/tui/mado_log.rb].include?(f)
   }
 
   spec.add_dependency "thor", "~> 1.3"

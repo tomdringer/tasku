@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "pastel"
+require "io/console"
 
 module Tasku
   module Output
@@ -39,27 +40,30 @@ module Tasku
         "archived"    => { color: :dim,    symbol: "⊘" }
       }.freeze
 
-      COL_SEP = "  "
+      COL_SEP = " │ "
+      # Maximum visible width of a due_cell value:
+      # "Mmm DD (NNNd ago)" = 17 chars.
+      DUE_COL_MIN_WIDTH = 17
 
       def initialize
         @pastel = Pastel.new
         @term_width = terminal_width
       end
 
-      def render_list(tasks, colour_map: {}, spacing: "compact", bar: {})
+      def render_list(tasks, colour_map: {}, spacing: "compact", bar: {}, cols_cfg: {})
         if tasks.empty?
           puts @pastel.yellow("  No tasks found.")
           return
         end
 
-        rows = tasks.map { |t| build_columns(t, colour_map, bar) }
-        col_widths = compute_widths(rows)
+        rows = tasks.map { |t| build_columns(t, colour_map, bar, cols_cfg) }
+        col_widths = compute_widths(rows, cols_cfg)
         total = col_widths.sum + (COL_SEP.length * (col_widths.length - 1))
 
         puts ""
         puts @pastel.dim("  #{"─" * total}")
         rows.each do |cols|
-          line = cols.each_with_index.map { |c, i| c.to_s.ljust(col_widths[i]) }.join(COL_SEP)
+          line = cols.each_with_index.map { |c, i| ansi_ljust(c.to_s, col_widths[i]) }.join(COL_SEP)
           puts "  #{line}"
           puts "" if spacing == "spacious"
         end
@@ -154,26 +158,55 @@ module Tasku
       end
 
       # Returns an array of pre-formatted row strings for MadoList.
-      # Accounts for the "[>] " prefix (4 extra chars) when computing widths.
-      def build_mado_rows(tasks, colour_map = {}, bar = {})
-        return [] if tasks.empty?
+      # Accounts for the "  [>] " prefix (6 extra chars) when computing widths.
+      # Optional columns (project → priority → status, never due) are dropped
+      # until ≥15 chars are available for task names.  Names are only truncated
+      # if they still overflow after all optional columns have been tried.
+      def build_mado_rows(tasks, colour_map = {}, bar = {}, cols_cfg = {})
+        return { rows: [], row_width: 0 } if tasks.empty?
 
         orig_width  = @term_width
-        @term_width = [@term_width - 4, 40].max
+        @term_width = [orig_width - 6, 40].max
 
-        col_rows   = tasks.map { |t| build_columns(t, colour_map, bar) }
-        col_widths = compute_widths(col_rows)
-        result = col_rows.map do |cols|
-          cols.each_with_index.map { |c, i| ansi_ljust(c.to_s, col_widths[i]) }.join(COL_SEP)
+        cfg = cols_cfg.dup
+
+        # Drop optional columns (project → category → priority → status) until names have room.
+        %i[project category priority status].each do |drop_col|
+          probe = tasks.map { |t| build_columns(t, colour_map, bar, cfg) }
+          ws    = mado_max_col_widths(probe, cfg)
+          break if mado_name_available(ws) >= 15
+          next if cfg["col_#{drop_col}"] == "off"
+          cfg["col_#{drop_col}"] = "off"
         end
 
+        col_rows   = tasks.map { |t| build_columns(t, colour_map, bar, cfg) }
+        col_widths = mado_max_col_widths(col_rows, cfg)
+        col_widths = mado_apply_truncation(col_rows, col_widths)
+
+        dim_sep = @pastel.dim(COL_SEP)
+        result  = col_rows.map do |cols|
+          cols.each_with_index.map { |c, i| ansi_ljust(c.to_s, col_widths[i]) }.join(dim_sep)
+        end
+
+        # Build header row aligned to col_widths.
+        labels = ["ID", "Name"]
+        %i[project category priority status due].each do |col|
+          next if cfg["col_#{col}"] == "off"
+          labels << { project: "Project", category: "Category",
+                      priority: "Priority", status: "Status", due: "Due" }[col]
+        end
+        header = labels.each_with_index
+                       .map { |lbl, i| ansi_ljust(@pastel.dim(lbl), col_widths[i]) }
+                       .join(dim_sep)
+
+        row_width = col_widths.sum + COL_SEP.length * (col_widths.length - 1)
         @term_width = orig_width
-        result
+        { rows: result, row_width: row_width, header: header }
       end
 
       private
 
-      def build_columns(task, colour_map = {}, bar = {})
+      def build_columns(task, colour_map = {}, bar = {}, cols_cfg = {})
         id_val = task.code && !task.code.empty? ? "#{task.code}-#{task.id}" : task.id.to_s
 
         segments = []
@@ -193,33 +226,117 @@ module Tasku
                  else
                    @pastel.dim(id_val)
                  end
-        name_str = @pastel.bold(task.name)
-        proj_str = project_str(task.project, colour_map)
-        prio_str = priority_tag(task.priority)
-        stat_str = status_tag(task.status)
-        due_str = due_cell(task)
-        [id_str, name_str, proj_str, prio_str, stat_str, due_str]
+
+        # ID (col 0) and Name (col 1) are always present.
+        result = [id_str, @pastel.bold(task.name)]
+        result << project_str(task.project, colour_map) unless cols_cfg["col_project"]  == "off"
+        result << category_str(task.category)           unless cols_cfg["col_category"] == "off"
+        result << priority_tag(task.priority)           unless cols_cfg["col_priority"] == "off"
+        result << status_tag(task.status)               unless cols_cfg["col_status"]   == "off"
+        result << due_cell(task)                        unless cols_cfg["col_due"]       == "off"
+        result
       end
 
-      def compute_widths(rows)
+      def compute_widths(rows, cols_cfg = {})
         raw = rows.map { |cols| cols.map { |c| strip_ansi(c.to_s).length } }
         maxes = raw.transpose.map(&:max)
-        sep_total = COL_SEP.length * (maxes.length - 1)
-        fixed_cols = maxes[0] + maxes[2] + maxes[3] + maxes[4] + maxes[5]
-        available_name = @term_width - fixed_cols - sep_total - 4
-        min_name = 20
 
-        if maxes[1] > available_name || maxes[1] < min_name
-          name_width = [available_name, min_name].max
-          rows.each_with_index do |cols, _ri|
-            raw_str = strip_ansi(cols[1].to_s)
-            if raw_str.length > name_width
-              cols[1] = "#{raw_str[0..name_width - 2]}#{@pastel.dim("…")}"
-            end
+        # Track which array index each optional column landed at (after id=0, name=1).
+        col_idx = {}
+        i = 2
+        %i[project category priority status due].each do |col|
+          unless cols_cfg["col_#{col}"] == "off"
+            col_idx[col] = i
+            i += 1
           end
-          maxes[1] = name_width
         end
 
+        # Apply user-configured minimum widths for optional fixed columns.
+        {
+          priority: [cols_cfg["col_priority_min"].to_i, 4].max,
+          status:   [cols_cfg["col_status_min"].to_i,   4].max,
+          due:      [[cols_cfg["col_due_min"].to_i, DUE_COL_MIN_WIDTH].max]
+        }.each do |col, mins|
+          if (idx = col_idx[col])
+            maxes[idx] = ([maxes[idx]] + Array(mins)).max
+          end
+        end
+
+        sep_total = COL_SEP.length * (maxes.length - 1)
+        # Fixed cols = everything except the name column (always at index 1).
+        fixed_cols = maxes.each_with_index.sum { |m, i| i == 1 ? 0 : m }
+        available_name = @term_width - fixed_cols - sep_total - 6
+
+        # Truncate names that would overflow; use count-based slice to avoid
+        # Ruby's negative-index wrapping when name_width is 0 or 1.
+        name_width = [available_name, 0].max
+        if maxes[1] > name_width
+          rows.each do |cols|
+            raw_str = strip_ansi(cols[1].to_s)
+            if raw_str.length > name_width
+              keep = [name_width - 1, 0].max
+              cols[1] = keep > 0 ? "#{raw_str[0, keep]}#{@pastel.dim("…")}" : ""
+            end
+          end
+        else
+          name_width = maxes[1]
+        end
+        maxes[1] = name_width
+
+        maxes
+      end
+
+      # Returns per-column max widths, applying configured minimums for
+      # priority (≥4), status (≥4), and due (≥DUE_COL_MIN_WIDTH).
+      # @term_width must already be reduced by 6 (the MadoList prefix).
+      def mado_max_col_widths(rows, cols_cfg = {})
+        raw   = rows.map { |cols| cols.map { |c| strip_ansi(c.to_s).length } }
+        maxes = raw.transpose.map(&:max)
+
+        col_idx = {}
+        i = 2
+        %i[project category priority status due].each do |col|
+          next if cols_cfg["col_#{col}"] == "off"
+          col_idx[col] = i
+          i += 1
+        end
+
+        { priority: [cols_cfg["col_priority_min"].to_i, 4].max,
+          status:   [cols_cfg["col_status_min"].to_i,   4].max,
+          due:      [cols_cfg["col_due_min"].to_i, DUE_COL_MIN_WIDTH].max
+        }.each do |col, min|
+          maxes[col_idx[col]] = [maxes[col_idx[col]], min].max if col_idx[col]
+        end
+
+        maxes
+      end
+
+      # How many chars are available for the name column given a widths array.
+      def mado_name_available(maxes)
+        sep_total  = COL_SEP.length * (maxes.length - 1)
+        fixed_cols = maxes.each_with_index.sum { |m, i| i == 1 ? 0 : m }
+        @term_width - fixed_cols - sep_total
+      end
+
+      # Truncate name cells in-place if they exceed available space.
+      # Always expands the name column to fill available space so the table
+      # spans the full terminal width (short names are padded by ansi_ljust).
+      # Returns the (possibly updated) widths array.
+      def mado_apply_truncation(rows, maxes)
+        avail  = mado_name_available(maxes)
+        name_w = [avail, 0].max
+        if maxes[1] > name_w
+          rows.each do |cols|
+            s = strip_ansi(cols[1].to_s)
+            if s.length > name_w
+              keep    = [name_w - 1, 0].max
+              cols[1] = keep > 0 ? "#{s[0, keep]}#{@pastel.dim("…")}" : ""
+            end
+          end
+        end
+        # Always set name column to full available width so the table fills
+        # the terminal — short names will be space-padded by ansi_ljust.
+        maxes[1] = name_w
         maxes
       end
 
@@ -236,6 +353,13 @@ module Tasku
       end
 
       def terminal_width
+        # Mado writes the exact PTY column count to this file before running
+        # tasku list, bypassing unreliable ioctl/winsize methods inside the PTY.
+        cols_file = ENV["TASKU_COLS_FILE"] || "/tmp/tasku_mado_cols"
+        cols = File.read(cols_file).strip.to_i rescue 0
+        return cols if cols > 0
+
+        `stty size 2>/dev/null`.split.last.to_i.tap { |w| return w if w > 0 }
         IO.console&.winsize&.[](1) || 80
       rescue
         80
@@ -257,6 +381,10 @@ module Tasku
         "\e[38;2;#{r};#{g};#{b}m#{text}\e[0m"
       end
 
+      def category_str(category)
+        category && !category.empty? ? @pastel.cyan(category) : @pastel.dim("—")
+      end
+
       def project_str(project, colour_map)
         return @pastel.dim("—") unless project
 
@@ -274,6 +402,9 @@ module Tasku
         day = task.due_day.strftime("%b %d")
         if task.overdue?
           @pastel.red("#{day} (#{diff.abs}d ago)")
+        elsif diff < 0
+          # Past due but task is done/cancelled — show dimly, no alarm
+          @pastel.dim("#{day} (#{diff.abs}d ago)")
         elsif diff.zero?
           @pastel.yellow("#{day} (today)")
         elsif diff <= 7

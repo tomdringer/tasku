@@ -2,6 +2,7 @@
 
 require "sequel"
 require "fileutils"
+require "securerandom"
 
 module Tasku
   module Database
@@ -10,6 +11,9 @@ module Tasku
 
     def self.connect
       FileUtils.mkdir_p(DB_DIR)
+      # Treat all stored datetime strings as UTC so comparisons with
+      # cloud timestamps (which are always UTC) stay consistent.
+      Sequel.database_timezone = :utc
       @db = Sequel.sqlite(DB_PATH)
       Sequel::Model.db = @db
       migrate
@@ -41,6 +45,14 @@ module Tasku
 
       if db.table_exists?(:tasks) && !db.schema(:tasks).map(&:first).include?(:code)
         db.alter_table(:tasks) { add_column :code, String }
+      end
+
+      if db.table_exists?(:tasks) && !db.schema(:tasks).map(&:first).include?(:uuid)
+        db.alter_table(:tasks) { add_column :uuid, String }
+        # Backfill existing tasks with UUIDs
+        db[:tasks].where(uuid: nil).each do |row|
+          db[:tasks].where(id: row[:id]).update(uuid: SecureRandom.uuid)
+        end
       end
 
       db.create_table? :projects do

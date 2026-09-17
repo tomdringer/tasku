@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+require "fileutils"
+require "json"
+require "net/http"
+require "uri"
+
 module Tasku
   module CLI
     LOGO = <<~LOGO
@@ -20,7 +25,11 @@ module Tasku
         puts ""
         Tasku::Config::VALID_KEYS.each do |key, meta|
           current = Tasku::Config.get(key)
-          options_str = meta[:values].map { |v| v == current ? pastel.bold(pastel.green(v)) : pastel.dim(v) }.join(", ")
+          if meta[:range]
+            options_str = pastel.bold(pastel.green(current)) + pastel.dim("  (#{meta[:range].min}–#{meta[:range].max})")
+          else
+            options_str = meta[:values].map { |v| v == current ? pastel.bold(pastel.green(v)) : pastel.dim(v) }.join(", ")
+          end
           puts "  #{pastel.bold(key.ljust(20))} #{options_str}  #{pastel.dim("— #{meta[:description]}")}"
         end
         puts ""
@@ -31,10 +40,11 @@ module Tasku
         pastel = Pastel.new
         meta = Tasku::Config::VALID_KEYS[key]
         abort pastel.red("Unknown preference '#{key}'. Run `tasku config list` to see available keys.") unless meta
-        unless meta[:values].include?(value)
-          abort pastel.red("Invalid value '#{value}' for '#{key}'. Valid: #{meta[:values].join(', ')}")
+        begin
+          Tasku::Config.set(key, value)
+        rescue ArgumentError => e
+          abort pastel.red("  #{e.message}")
         end
-        Tasku::Config.set(key, value)
         puts pastel.green("  ✓ #{key} set to '#{value}'.")
       end
 
@@ -44,6 +54,224 @@ module Tasku
         meta = Tasku::Config::VALID_KEYS[key]
         abort pastel.red("Unknown preference '#{key}'. Run `tasku config list` to see available keys.") unless meta
         puts "  #{key}: #{pastel.bold(Tasku::Config.get(key))}"
+      end
+
+      desc "open", "Open the config file in $EDITOR"
+      def open
+        path = Tasku::Config::CONFIG_PATH
+        FileUtils.mkdir_p(File.dirname(path))
+        # Seed file with all defaults so every key is visible for editing.
+        current = Tasku::Config.all
+        seeded = Tasku::Config::VALID_KEYS.transform_values { |meta| meta[:default] }.merge(current)
+        File.write(path, JSON.pretty_generate(seeded))
+        editor = ENV["EDITOR"] || ENV["VISUAL"] || "vi"
+        exec(editor, path)
+      end
+    end
+
+    class CloudApp < Thor
+      desc "login TOKEN", "Authenticate with Tasku Cloud using an API token"
+      option :url, type: :string, desc: "Tasku Cloud URL (default: #{Tasku::Config::CLOUD_URL_DEFAULT})"
+      def login(token)
+        pastel = Pastel.new
+        url = options[:url] || Tasku::Config.cloud_url
+
+        puts pastel.dim("  Verifying token with #{url}...")
+
+        begin
+          uri = URI.join(url, "/api/v1/sync")
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = uri.scheme == "https"
+          http.open_timeout = 10
+          http.read_timeout = 10
+
+          req = Net::HTTP::Post.new(uri.path, {
+            "Content-Type"  => "application/json",
+            "Authorization" => "Bearer #{token}"
+          })
+          req.body = JSON.generate({ tasks: [], last_synced_at: nil })
+
+          res = http.request(req)
+        rescue Errno::ECONNREFUSED, Errno::ENOENT, SocketError, Net::OpenTimeout => e
+          abort pastel.red("  Could not connect to #{url}: #{e.message}")
+        end
+
+        if res.code == "200"
+          Tasku::Config.cloud_token = token
+          Tasku::Config.cloud_url = url if options[:url]
+          puts ""
+          puts pastel.green("  ✓ Logged in to Tasku Cloud.")
+          puts pastel.dim("  Token saved to ~/.tasku/config.json")
+          puts pastel.dim("  Run `tasku cloud sync` to sync your tasks.")
+          puts ""
+        elsif res.code == "401"
+          abort pastel.red("  Invalid token. Check it and try again.")
+        else
+          abort pastel.red("  Unexpected response from server (#{res.code}).")
+        end
+      end
+
+      desc "status", "Show Tasku Cloud connection status"
+      def status
+        pastel = Pastel.new
+        puts ""
+        if Tasku::Config.cloud_configured?
+          puts "  #{pastel.green("●")} Connected to #{pastel.bold(Tasku::Config.cloud_url)}"
+          last = Tasku::Config.last_synced_at
+          puts "  Last synced: #{last ? pastel.bold(last.localtime.strftime("%-d %b %Y at %H:%M")) : pastel.dim("never")}"
+        else
+          puts "  #{pastel.dim("○")} Not connected."
+          puts "  #{pastel.dim("Run `tasku cloud login <token>` to connect.")}"
+        end
+        puts ""
+      end
+
+      desc "logout", "Remove saved Tasku Cloud credentials"
+      def logout
+        pastel = Pastel.new
+        Tasku::Config.cloud_token = nil
+        Tasku::Config.last_synced_at = nil
+        puts pastel.green("  ✓ Logged out of Tasku Cloud.")
+      end
+
+      desc "sync", "Two-way sync tasks with Tasku Cloud"
+      def sync
+        pastel = Pastel.new
+
+        unless Tasku::Config.cloud_configured?
+          abort pastel.red("  Not connected. Run `tasku cloud login <token>` first.")
+        end
+
+        url            = Tasku::Config.cloud_url
+        token          = Tasku::Config.cloud_token
+        last_synced_at = Tasku::Config.last_synced_at
+
+        puts pastel.dim("  Syncing with #{url}...")
+
+        # Serialise every local task for upload
+        local_tasks = Tasku::Task.all.map do |t|
+          {
+            uuid:            t.uuid,
+            name:            t.name,
+            description:     t.description,
+            project:         t.project,
+            category:        t.category,
+            start_day:       t.start_day&.iso8601,
+            due_day:         t.due_day&.iso8601,
+            code:            t.code,
+            priority:        t.priority,
+            status:          t.status,
+            tags:            t.tags,
+            estimated_hours: t.estimated_hours,
+            updated_at:      t.updated_at&.utc&.iso8601,
+            created_at:      t.created_at&.utc&.iso8601
+          }
+        end
+
+        begin
+          uri  = URI.join(url, "/api/v1/sync")
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl    = uri.scheme == "https"
+          http.open_timeout = 15
+          http.read_timeout = 30
+
+          req = Net::HTTP::Post.new(uri.path, {
+            "Content-Type"  => "application/json",
+            "Authorization" => "Bearer #{token}"
+          })
+          local_projects = Tasku::Database.db[:projects].all.map do |p|
+            { name: p[:name], colour: p[:colour] }
+          end
+
+          req.body = JSON.generate({ tasks: local_tasks, projects: local_projects, last_synced_at: last_synced_at&.iso8601 })
+
+          res = http.request(req)
+        rescue Errno::ECONNREFUSED, Errno::ENOENT, SocketError, Net::OpenTimeout => e
+          abort pastel.red("  Could not connect to #{url}: #{e.message}")
+        end
+
+        if res.code == "401"
+          abort pastel.red("  Invalid token — run `tasku cloud login <token>` to reauthenticate.")
+        elsif res.code != "200"
+          abort pastel.red("  Sync failed (HTTP #{res.code}).")
+        end
+
+        body         = JSON.parse(res.body)
+        server_tasks = body["tasks"] || []
+        synced_at    = body["synced_at"]
+
+        created = updated = conflicts = 0
+
+        server_tasks.each do |st|
+          next unless st["uuid"]
+
+          # Conflict tasks live server-side; the user resolves them on the web.
+          if st["conflict"]
+            conflicts += 1
+            next
+          end
+
+          local = Tasku::Task.first(uuid: st["uuid"])
+
+          server_updated = st["updated_at"] ? Time.parse(st["updated_at"]).utc : nil
+
+          if local.nil?
+            # New task from cloud — write directly to bypass timestamps plugin
+            # so updated_at matches the server's value exactly.
+            Tasku::Database.db[:tasks].insert(
+              uuid:            st["uuid"],
+              name:            st["name"],
+              description:     st["description"],
+              project:         st["project"],
+              category:        st["category"],
+              start_day:       st["start_day"] ? Date.parse(st["start_day"]) : nil,
+              due_day:         st["due_day"]   ? Date.parse(st["due_day"])   : nil,
+              code:            st["code"],
+              priority:        st["priority"] || "none",
+              status:          st["status"]   || "todo",
+              tags:            st["tags"],
+              estimated_hours: st["estimated_hours"],
+              created_at:      st["created_at"] ? Time.parse(st["created_at"]).utc : Time.now.utc,
+              updated_at:      server_updated || Time.now.utc
+            )
+            created += 1
+          else
+            local_updated = local.updated_at ? local.updated_at.utc : nil
+
+            if server_updated && local_updated && server_updated > local_updated
+              # Write via dataset to preserve server's updated_at exactly,
+              # preventing the local timestamp from drifting forward and
+              # triggering another upload next sync.
+              Tasku::Database.db[:tasks].where(id: local.id).update(
+                name:            st["name"],
+                description:     st["description"],
+                project:         st["project"],
+                category:        st["category"],
+                start_day:       st["start_day"] ? Date.parse(st["start_day"]) : nil,
+                due_day:         st["due_day"]   ? Date.parse(st["due_day"])   : nil,
+                code:            st["code"],
+                priority:        st["priority"] || "none",
+                status:          st["status"]   || "todo",
+                tags:            st["tags"],
+                estimated_hours: st["estimated_hours"],
+                updated_at:      server_updated
+              )
+              updated += 1
+            end
+          end
+        end
+
+        Tasku::Config.last_synced_at = synced_at ? Time.parse(synced_at).utc : Time.now.utc
+
+        puts ""
+        puts "  #{pastel.green("✓")} Sync complete."
+        puts "  #{pastel.bold(local_tasks.count.to_s)} #{local_tasks.count == 1 ? "task" : "tasks"} pushed to cloud."
+        puts "  #{pastel.bold(created.to_s)} #{created == 1 ? "task" : "tasks"} pulled from cloud."  if created > 0
+        puts "  #{pastel.bold(updated.to_s)} #{updated == 1 ? "task" : "tasks"} updated from cloud." if updated > 0
+        if conflicts > 0
+          puts "  #{pastel.yellow("⚠")}  #{conflicts} #{conflicts == 1 ? "conflict" : "conflicts"} — visit #{pastel.bold(url)} to resolve."
+        end
+        puts ""
       end
     end
 
@@ -73,6 +301,9 @@ module Tasku
 
       desc "config SUBCOMMAND", "Manage user preferences"
       subcommand "config", ConfigApp
+
+      desc "cloud SUBCOMMAND", "Sync tasks with Tasku Cloud"
+      subcommand "cloud", CloudApp
 
       def help(*args)
         if args.empty?
@@ -161,6 +392,11 @@ module Tasku
                   option_add
                 end
 
+        if attrs.nil?
+          puts pastel.yellow("  Add cancelled.")
+          return
+        end
+
         task = Task.create(attrs)
         terminal.render_added(task)
       rescue Sequel::ValidationFailed => e
@@ -173,9 +409,11 @@ module Tasku
       option :project,  type: :string,  desc: "Filter by project"
       option :category, type: :string,  desc: "Filter by category"
       option :tags,     type: :string,  desc: "Filter by tag (comma-separated)"
-      option :overdue,  type: :boolean, desc: "Show only overdue tasks"
-      option :sort,     type: :string,  desc: "Sort by: id, name, priority, due, status, created"
-      option :order,    type: :string,  desc: "Order: asc, desc", default: "asc"
+      option :overdue,   type: :boolean, desc: "Show only overdue tasks"
+      option :today,     type: :boolean, desc: "Show tasks due today"
+      option :tomorrow,  type: :boolean, desc: "Show tasks due tomorrow"
+      option :sort,      type: :string,  desc: "Sort by: id, name, priority, due, status, created"
+      option :order,     type: :string,  desc: "Order: asc, desc", default: "asc"
       def list
         dataset = Task.dataset
 
@@ -196,6 +434,16 @@ module Tasku
           dataset = dataset.where { due_day < today }.exclude(status: %w[done cancelled])
         end
 
+        if options[:today]
+          today = Date.today
+          dataset = dataset.where(due_day: today).exclude(status: %w[done cancelled])
+        end
+
+        if options[:tomorrow]
+          tomorrow = Date.today + 1
+          dataset = dataset.where(due_day: tomorrow).exclude(status: %w[done cancelled])
+        end
+
         sort_col = case options[:sort]
                    when "name"     then :name
                    when "priority" then Sequel.case(Task::VALID_PRIORITIES.each_with_index.to_h, 999, :priority)
@@ -210,10 +458,21 @@ module Tasku
 
         tasks = dataset.all
         bar = { "bar_project" => Config.get("bar_project"), "bar_priority" => Config.get("bar_priority"), "bar_status" => Config.get("bar_status") }
+        cols_cfg = {
+          "col_project"      => Config.get("col_project"),
+          "col_category"     => Config.get("col_category"),
+          "col_priority"     => Config.get("col_priority"),
+          "col_status"       => Config.get("col_status"),
+          "col_due"          => Config.get("col_due"),
+          "col_name_min"     => Config.get("col_name_min"),
+          "col_priority_min" => Config.get("col_priority_min"),
+          "col_status_min"   => Config.get("col_status_min"),
+          "col_due_min"      => Config.get("col_due_min")
+        }
         if ENV["MADO"] == "1"
-          Tasku::TUI::MadoList.new(tasks, colour_map: Project.colour_map, bar: bar).run
+          Tasku::TUI::MadoList.new(tasks, colour_map: Project.colour_map, bar: bar, cols_cfg: cols_cfg, project: options[:project]).run
         else
-          terminal.render_list(tasks, colour_map: Project.colour_map, spacing: Config.get("list_spacing"), bar: bar)
+          terminal.render_list(tasks, colour_map: Project.colour_map, spacing: Config.get("list_spacing"), bar: bar, cols_cfg: cols_cfg)
         end
       end
 
@@ -237,10 +496,19 @@ module Tasku
       option :hours,       type: :numeric, desc: "Estimated hours"
       option :code,        type: :string,  desc: "Code"
       option :clear,       type: :string,  desc: "Clear a field: description, start, due, model, tags, hours, code"
+      option :interactive, type: :boolean, aliases: "-i", desc: "Interactive mode", default: false
       def edit(id)
         task = find_task(id)
 
-        attrs = option_edit
+        attrs = if options[:interactive]
+                  interactive_edit(task)
+                else
+                  option_edit
+                end
+        if attrs.nil?
+          puts pastel.yellow("  Edit cancelled.")
+          return
+        end
         if attrs.empty? && !options[:clear]
           puts pastel.yellow("No changes specified. Use --help to see available options.")
           return
@@ -296,8 +564,11 @@ module Tasku
       end
 
       desc "stats", "Show task statistics"
+      option :project, type: :string, desc: "Filter by project"
       def stats
-        tasks = Task.dataset.all
+        dataset = Task.dataset
+        dataset = dataset.where(project: options[:project]) if options[:project]
+        tasks = dataset.all
         terminal.render_stats(tasks, colour_map: Project.colour_map) if tasks
       end
 
@@ -437,6 +708,69 @@ module Tasku
             tags: (tags unless tags&.empty?),
             estimated_hours: hours
           }.compact
+        rescue TTY::Reader::InputInterrupt
+          nil
+        end
+
+        def interactive_edit(task)
+          prompt = TTY::Prompt.new
+
+          name = prompt.ask("Task name:", default: task.name, required: true) do |q|
+            q.modify :strip
+          end
+
+          description = prompt.ask("Description:", default: task.description || "")
+          description = nil if description&.empty?
+
+          project = prompt.ask("Project:", default: task.project || "")
+          project = nil if project&.empty?
+
+          category = prompt.ask("Category:", default: task.category || "")
+          category = nil if category&.empty?
+
+          priority = prompt.select("Priority?", %w[none low medium high urgent],
+                                   default: task.priority || "none")
+          status = prompt.select("Status?", Task::VALID_STATUSES,
+                                 default: task.status || "todo")
+
+          start_day = prompt.ask("Start date (YYYY-MM-DD, optional):",
+                                 default: task.start_day&.to_s || "")
+          start_day = nil if start_day&.empty?
+
+          due_day = prompt.ask("Due date (YYYY-MM-DD, optional):",
+                               default: task.due_day&.to_s || "")
+          due_day = nil if due_day&.empty?
+
+          model_name = prompt.ask("Model:", default: task.model_name || "")
+          model_name = nil if model_name&.empty?
+
+          code = prompt.ask("Code:", default: task.code || "")
+          code = nil if code&.empty?
+
+          tags = prompt.ask("Tags (comma-separated):", default: task.tags || "")
+          tags = nil if tags&.empty?
+
+          hours = prompt.ask("Estimated hours:", default: task.estimated_hours&.to_s || "") do |q|
+            q.convert(:float, "")
+          end
+          hours = nil if hours.is_a?(String) && hours.empty?
+
+          {
+            name: name,
+            description: description,
+            project: project,
+            category: category,
+            start_day: parse_date(start_day),
+            due_day: parse_date(due_day),
+            model_name: model_name,
+            code: code,
+            priority: priority,
+            status: status,
+            tags: tags,
+            estimated_hours: hours
+          }.compact
+        rescue TTY::Reader::InputInterrupt
+          nil
         end
 
         def option_add

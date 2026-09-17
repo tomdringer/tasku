@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    tasku (0.2.2)
+    tasku (0.3.9)
       pastel (~> 0.8)
       sequel (~> 5.0)
       sqlite3 (~> 1.6)

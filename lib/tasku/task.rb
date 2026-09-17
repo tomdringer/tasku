@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "database"
+require "securerandom"
 
 module Tasku
   class Task < Sequel::Model(:tasks)
@@ -8,6 +9,11 @@ module Tasku
 
     VALID_PRIORITIES = %w[none low medium high urgent].freeze
     VALID_STATUSES = %w[backlog todo in_progress done cancelled archived].freeze
+
+    def before_create
+      super
+      self.uuid ||= SecureRandom.uuid
+    end
 
     def before_validation
       super
