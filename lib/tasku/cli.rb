@@ -470,7 +470,15 @@ module Tasku
           "col_due_min"      => Config.get("col_due_min")
         }
         if ENV["MADO"] == "1"
-          Tasku::TUI::MadoList.new(tasks, colour_map: Project.colour_map, bar: bar, cols_cfg: cols_cfg, project: options[:project]).run
+          list_cmd = "tasku list"
+          list_cmd += " --status #{Shellwords.shellescape(options[:status])}"     if options[:status]
+          list_cmd += " --priority #{Shellwords.shellescape(options[:priority])}" if options[:priority]
+          list_cmd += " --project #{Shellwords.shellescape(options[:project])}"   if options[:project]
+          list_cmd += " --category #{Shellwords.shellescape(options[:category])}" if options[:category]
+          list_cmd += " --today"    if options[:today]
+          list_cmd += " --tomorrow" if options[:tomorrow]
+          list_cmd += " --overdue"  if options[:overdue]
+          Tasku::TUI::MadoList.new(tasks, colour_map: Project.colour_map, bar: bar, cols_cfg: cols_cfg, project: options[:project], list_cmd: list_cmd).run
         else
           terminal.render_list(tasks, colour_map: Project.colour_map, spacing: Config.get("list_spacing"), bar: bar, cols_cfg: cols_cfg)
         end

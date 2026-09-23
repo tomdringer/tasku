@@ -12,7 +12,7 @@ Gem::Specification.new do |spec|
   spec.metadata    = {
     "homepage_uri" => "https://github.com/tomdringer/tasku",
     "source_code_uri" => "https://github.com/tomdringer/tasku",
-    "changelog_uri" => "https://github.com/tomdringer/tasku/releases"
+    "changelog_uri" => "https://github.com/tomdringer/tasku/blob/main/CHANGELOG.md"
   }
   spec.license     = "MIT"
   spec.required_ruby_version = ">= 3.1.0"
@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
   spec.executables = ["tasku"]
   spec.require_paths = ["lib"]
 
-  spec.files = Dir["lib/**/*", "exe/*"].reject { |f|
+  spec.files = ["CHANGELOG.md"] + Dir["lib/**/*", "exe/*"].reject { |f|
     f.start_with?("lib/tasku/tui") &&
       !%w[lib/tasku/tui/mado_list.rb lib/tasku/tui/mado_log.rb].include?(f)
   }
