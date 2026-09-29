@@ -2,6 +2,11 @@
 
 All notable changes to Tasku are documented here.
 
+## [0.4.1] - 2026-09-29
+
+### Fixed
+- **Cloud sync: project colours now sync down** — `tasku cloud sync` applied only the tasks from the server's response and ignored its `projects`, so colours set on another machine never arrived. They are now created or updated locally, and the sync summary reports how many changed. In Mado this also restores project colours and workspaces on a freshly synced machine
+
 ## [0.4.0] - 2026-09-23
 
 ### Added

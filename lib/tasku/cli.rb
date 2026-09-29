@@ -261,6 +261,21 @@ module Tasku
           end
         end
 
+        # Local projects were pushed above, so the server's list already reflects
+        # them — adopt it wholesale so colours set on other machines come down.
+        projects_pulled = 0
+        (body["projects"] || []).each do |sp|
+          name   = sp["name"].to_s.strip
+          colour = sp["colour"].to_s.strip
+          next if name.empty? || colour !~ /\A#[0-9A-Fa-f]{6}\z/
+
+          proj = Tasku::Project.find_or_create(name: name)
+          next if proj.colour == colour
+
+          proj.update(colour: colour)
+          projects_pulled += 1
+        end
+
         Tasku::Config.last_synced_at = synced_at ? Time.parse(synced_at).utc : Time.now.utc
 
         puts ""
@@ -268,6 +283,7 @@ module Tasku
         puts "  #{pastel.bold(local_tasks.count.to_s)} #{local_tasks.count == 1 ? "task" : "tasks"} pushed to cloud."
         puts "  #{pastel.bold(created.to_s)} #{created == 1 ? "task" : "tasks"} pulled from cloud."  if created > 0
         puts "  #{pastel.bold(updated.to_s)} #{updated == 1 ? "task" : "tasks"} updated from cloud." if updated > 0
+        puts "  #{pastel.bold(projects_pulled.to_s)} #{projects_pulled == 1 ? "project colour" : "project colours"} updated from cloud." if projects_pulled > 0
         if conflicts > 0
           puts "  #{pastel.yellow("⚠")}  #{conflicts} #{conflicts == 1 ? "conflict" : "conflicts"} — visit #{pastel.bold(url)} to resolve."
         end
