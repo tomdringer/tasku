@@ -175,7 +175,7 @@ module Tasku
             restore_terminal
             $stdin.cooked!
             MadoLog.log("inline_exec tasku list → exec #{cmd.inspect}")
-            exec(cmd)
+            exec(*Shellwords.shellsplit(cmd))
           else
             run_command(cmd)
           end
