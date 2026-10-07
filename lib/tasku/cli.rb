@@ -196,9 +196,10 @@ module Tasku
           abort pastel.red("  Sync failed (HTTP #{res.code}).")
         end
 
-        body         = JSON.parse(res.body)
-        server_tasks = body["tasks"] || []
-        synced_at    = body["synced_at"]
+        body            = JSON.parse(res.body)
+        server_tasks    = body["tasks"]    || []
+        server_projects = body["projects"] || []
+        synced_at       = body["synced_at"]
 
         created = updated = conflicts = 0
 
