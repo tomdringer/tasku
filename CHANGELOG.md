@@ -2,6 +2,13 @@
 
 All notable changes to Tasku are documented here.
 
+## [Unreleased]
+
+### Security
+- All `system()` and `exec()` calls in `MadoList` now use the array form (via
+  `Shellwords.shellsplit`) instead of a shell string, preventing shell
+  interpretation of metacharacters in command arguments
+
 ## [0.4.1] - 2026-09-29
 
 ### Fixed
