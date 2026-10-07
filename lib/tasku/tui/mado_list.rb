@@ -189,9 +189,9 @@ module Tasku
         @running = false
         restore_terminal
         $stdin.cooked!
-        system(cmd)
+        system(*Shellwords.shellsplit(cmd))
         MadoLog.log("run_command finished cmd=#{cmd.inspect} → exec #{@list_cmd}")
-        exec(@list_cmd)
+        exec(*Shellwords.shellsplit(@list_cmd))
       end
 
       # Run a non-interactive display command, wait for any keypress via
@@ -202,12 +202,12 @@ module Tasku
         @running = false
         restore_terminal
         $stdin.cooked!
-        system(cmd)
+        system(*Shellwords.shellsplit(cmd))
         $stdout.print "\r\n\e[2m  Press any key to return to list…\e[0m\r\n"
         $stdout.flush
         $stdin.getch
         MadoLog.log("run_and_show keypress received → exec #{@list_cmd}")
-        exec(@list_cmd)
+        exec(*Shellwords.shellsplit(@list_cmd))
       end
 
       # Show a SQL prompt, run the query, wait for keypress, then re-exec list.
@@ -227,7 +227,7 @@ module Tasku
           $stdin.getch
         end
         MadoLog.log("run_sql done → exec #{@list_cmd}")
-        exec(@list_cmd)
+        exec(*Shellwords.shellsplit(@list_cmd))
       end
 
       def restore_terminal
