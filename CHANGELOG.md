@@ -4,6 +4,9 @@ All notable changes to Tasku are documented here.
 
 ## [Unreleased]
 
+### Added
+- **Mado: confirm before delete** — pressing `d` in the interactive task list now shows a confirmation prompt; press `y` to confirm, any other key cancels
+
 ### Security
 - All `system()` and `exec()` calls in `MadoList` now use the array form (via
   `Shellwords.shellsplit`) instead of a shell string, preventing shell

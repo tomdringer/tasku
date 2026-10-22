@@ -13,6 +13,7 @@ module Tasku
     # button handlers can inject it into commands like `tasku edit <id>`.
     class MadoList
       HINT = "  ↑↓ navigate   a add   e/↵ edit   d delete   s stats   q quit"
+      HINT_CONFIRM = "  Delete task? Press y to confirm, any other key to cancel"
 
       def initialize(tasks, colour_map: {}, bar: {}, cols_cfg: {}, project: nil, list_cmd: nil)
         @tasks      = tasks
@@ -156,7 +157,7 @@ module Tasku
           run_command("tasku edit #{@tasks[@cursor].id} -i")
         when :delete
           return if @tasks.empty?
-          run_command("tasku delete #{@tasks[@cursor].id} -f")
+          confirm_delete
         when :stats
           run_and_show("tasku stats")
         when :inline_exec
@@ -228,6 +229,23 @@ module Tasku
         end
         MadoLog.log("run_sql done → exec #{@list_cmd}")
         exec(*Shellwords.shellsplit(@list_cmd))
+      end
+
+      def confirm_delete
+        task = @tasks[@cursor]
+        name_preview = task.name.length > 40 ? "#{task.name[0, 39]}…" : task.name
+        border = @pastel.dim("  " + "─" * (@row_width + 4))
+        $stdout.print "\r\n#{border}\r\n"
+        $stdout.print "  #{@pastel.yellow("Delete: ")}#{name_preview}\r\n"
+        $stdout.print "#{border}\r\n"
+        $stdout.print "#{@pastel.dim(HINT_CONFIRM)}\r\n"
+        $stdout.flush
+        byte = $stdin.getbyte
+        if byte == 0x79 || byte == 0x59  # y / Y
+          run_command("tasku delete #{task.id} -f")
+        else
+          full_render
+        end
       end
 
       def restore_terminal
