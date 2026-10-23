@@ -104,6 +104,40 @@ module Tasku
       !cloud_token.nil?
     end
 
+    # ── Git project paths ──────────────────────────────────────────────────
+    # Maps a 3-char project code (e.g. "TAS") to an absolute repo path.
+    # Stored under the "git_projects" key in config.json.
+
+    def self.git_path_for(code)
+      git_projects[code.to_s.upcase]
+    end
+
+    def self.set_git_path(code, path)
+      current = all
+      current["git_projects"] ||= {}
+      current["git_projects"][code.to_s.upcase] = File.expand_path(path)
+      FileUtils.mkdir_p(File.dirname(CONFIG_PATH))
+      File.write(CONFIG_PATH, JSON.pretty_generate(current))
+    end
+
+    def self.unset_git_path(code)
+      current = all
+      return unless current["git_projects"]
+
+      current["git_projects"].delete(code.to_s.upcase)
+      current.delete("git_projects") if current["git_projects"].empty?
+      File.write(CONFIG_PATH, JSON.pretty_generate(current))
+    end
+
+    def self.all_git_projects
+      git_projects
+    end
+
+    def self.git_projects
+      all["git_projects"] || {}
+    end
+    private_class_method :git_projects
+
     def self.get(key)
       all[key] || VALID_KEYS.dig(key, :default)
     end

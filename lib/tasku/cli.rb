@@ -3,6 +3,7 @@
 require "fileutils"
 require "json"
 require "net/http"
+require "shellwords"
 require "uri"
 
 module Tasku
@@ -66,6 +67,48 @@ module Tasku
         File.write(path, JSON.pretty_generate(seeded))
         editor = ENV["EDITOR"] || ENV["VISUAL"] || "vi"
         exec(editor, path)
+      end
+    end
+
+    class GitApp < Thor
+      desc "link CODE PATH", "Link a project code to a git repo path (enables auto branch checkout)"
+      def link(code, path)
+        pastel = Pastel.new
+        expanded = File.expand_path(path)
+        unless Dir.exist?(expanded)
+          abort pastel.red("  Path does not exist: #{expanded}")
+        end
+        unless Dir.exist?(File.join(expanded, ".git"))
+          abort pastel.red("  Not a git repository: #{expanded}")
+        end
+        Tasku::Config.set_git_path(code, expanded)
+        puts pastel.green("  ✓ #{code.upcase} linked to #{expanded}")
+        puts pastel.dim("  Setting a task to in_progress will now auto-checkout a branch.")
+      end
+
+      desc "unlink CODE", "Remove a project code's git repo link"
+      def unlink(code)
+        pastel = Pastel.new
+        unless Tasku::Config.git_path_for(code)
+          abort pastel.yellow("  #{code.upcase} is not linked to any repo.")
+        end
+        Tasku::Config.unset_git_path(code)
+        puts pastel.green("  ✓ #{code.upcase} unlinked.")
+      end
+
+      desc "list", "List all project code → repo path links"
+      def list
+        pastel = Pastel.new
+        projects = Tasku::Config.all_git_projects
+        if projects.empty?
+          puts pastel.dim("  No git links configured. Use `tasku git link CODE PATH` to add one.")
+          return
+        end
+        puts ""
+        projects.each do |code, path|
+          puts "  #{pastel.bold(code.ljust(8))} #{path}"
+        end
+        puts ""
       end
     end
 
@@ -319,6 +362,9 @@ module Tasku
       desc "config SUBCOMMAND", "Manage user preferences"
       subcommand "config", ConfigApp
 
+      desc "git SUBCOMMAND", "Manage git repo links for auto branch checkout"
+      subcommand "git", GitApp
+
       desc "cloud SUBCOMMAND", "Sync tasks with Tasku Cloud"
       subcommand "cloud", CloudApp
 
@@ -562,6 +608,7 @@ module Tasku
 
         task.update(attrs)
         terminal.render_updated(task)
+        auto_checkout_branch(task, attrs) if attrs[:status] == "in_progress"
       rescue Sequel::ValidationFailed => e
         abort pastel.red("Validation error: #{e.message}")
       end
@@ -883,6 +930,34 @@ module Tasku
         def hex_bold_str(text, hex)
           r, g, b = hex.delete("#").scan(/../).map { |c| c.to_i(16) }
           "\e[1;38;2;#{r};#{g};#{b}m#{text}\e[0m"
+        end
+
+        def auto_checkout_branch(task, attrs)
+          return unless task.code && !task.code.empty?
+
+          repo_path = Tasku::Config.git_path_for(task.code)
+          return unless repo_path
+
+          slug = task.name.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-|-\z/, "")
+          branch = "#{task.code}-#{task.id}-#{slug}"
+
+          # Check if the branch already exists locally.
+          existing = `git -C #{repo_path.shellescape} branch --list #{branch.shellescape} 2>/dev/null`.strip
+          if existing.empty?
+            result = system("git", "-C", repo_path, "checkout", "-b", branch, out: :close, err: :close)
+            if result
+              puts pastel.dim("  git: created and switched to branch #{branch}")
+            else
+              puts pastel.yellow("  git: could not create branch #{branch} — is the working tree clean?")
+            end
+          else
+            result = system("git", "-C", repo_path, "checkout", branch, out: :close, err: :close)
+            if result
+              puts pastel.dim("  git: switched to existing branch #{branch}")
+            else
+              puts pastel.yellow("  git: could not switch to branch #{branch}")
+            end
+          end
         end
 
         def colour_cell(col, padded_val, row)
