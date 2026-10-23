@@ -5,6 +5,7 @@ All notable changes to Tasku are documented here.
 ## [Unreleased]
 
 ### Added
+- **Auto branch checkout** — when a task is set to `in_progress` via `tasku edit ID --status in_progress`, Tasku automatically creates and checks out a git branch named `CODE-ID-name-slug` in the linked repo. If the branch already exists it switches to it instead. Configure with `tasku git link CODE PATH`, remove with `tasku git unlink CODE`, and inspect with `tasku git list`.
 - **Mado: confirm before delete** — pressing `d` in the interactive task list now shows a confirmation prompt; press `y` to confirm, any other key cancels
 
 ### Security
