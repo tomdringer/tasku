@@ -52,6 +52,7 @@ tasku projects         List all projects
 tasku categories       List all categories
 tasku colour           Set a project colour
 tasku config           Manage user preferences
+tasku git              Manage git repo links for auto branch checkout
 tasku version          Show version
 ```
 
@@ -95,6 +96,30 @@ tasku edit 1 --clear tags,hours
 |----------|-------------------------------------------------------------------|
 | Priority | `none`, `low`, `medium`, `high`, `urgent`                         |
 | Status   | `backlog`, `todo`, `in_progress`, `done`, `cancelled`, `archived` |
+
+---
+
+### Git auto branch checkout
+
+Link a project code to a git repo and Tasku will automatically create and checkout a branch whenever you move a task to `in_progress`.
+
+```bash
+tasku git link MDO ~/Sites/mado       # link project code to a repo
+tasku git unlink MDO                  # remove a link
+tasku git list                        # show all links
+```
+
+Once linked, setting a task to `in_progress` via the CLI will checkout a branch named `CODE-ID-name-slug`:
+
+```bash
+tasku edit 42 --status in_progress
+# ✓ Task #42 updated — Build login page
+# git: created and switched to branch MDO-42-build-login-page
+```
+
+If the branch already exists (e.g. you set a task back to `in_progress` after pausing it), Tasku switches to it instead of creating a new one.
+
+Branch links are saved to `~/.tasku/config.json` and only apply to the CLI — the interactive Mado panel is not affected.
 
 ---
 
