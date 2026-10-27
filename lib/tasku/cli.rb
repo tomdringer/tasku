@@ -744,7 +744,7 @@ module Tasku
           category = nil if category&.empty?
 
           priority = prompt.select("Priority?", %w[none low medium high urgent], default: 1)
-          status = prompt.select("Status?", %w[backlog todo in_progress], default: 2)
+          status = prompt.select("Status?", Task::VALID_STATUSES, default: 2)
 
           start_day = prompt.ask("Start date (YYYY-MM-DD, optional):", default: "")
           start_day = nil if start_day&.empty?
